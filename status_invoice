@@ -1,0 +1,278 @@
+<!--
+    IMPORTANT:
+    - Policy elements can appear only within the <inbound>, <outbound>, <backend> section elements.
+    - To apply a policy to the incoming request (before it is forwarded to the backend service), place a corresponding policy element within the <inbound> section element.
+    - To apply a policy to the outgoing response (before it is sent back to the caller), place a corresponding policy element within the <outbound> section element.
+    - To add a policy, place the cursor at the desired insertion point and select a policy from the sidebar.
+    - To remove a policy, delete the corresponding policy statement from the policy document.
+    - Position the <base> element within a section element to inherit all policies from the corresponding section element in the enclosing scope.
+    - Remove the <base> element to prevent inheriting policies from the corresponding section element in the enclosing scope.
+    - Policies are applied in the order of their appearance, from the top down.
+    - Comments within policy elements are not supported and may disappear. Place your comments between policy elements or at a higher level scope.
+-->
+<policies>
+    <inbound>
+        <set-variable name="enduserid" value="@(context.Request.OriginalUrl.Path.ToString().Split('/')[4])" />
+        <set-header name="x-scope" exists-action="override">
+            <value>""</value>
+        </set-header>
+
+        <choose>
+            <!--
+            LIGA/DESLIGA chamada a API de status das faturas.
+            Desligar: Sum(c => c) % 9 < 0)
+            Ligar:    Sum(c => c) % 9 < 10)
+
+            Metrica do Transbordo
+            10 = 100%
+            5  = 50%
+            1  = 10%
+
+            -->
+            <when condition="@(context.Request.OriginalUrl.Path.ToString().Split('/')[4].ToCharArray().Sum(c => c) % 9 < 10)">
+                <set-header name="x-verify-status-bill" exists-action="override">
+                    <value>true</value>
+                </set-header>
+            </when>
+        </choose>
+        <!--
+           Hash de selecão de backend
+        -->
+        <choose>
+            <!-- cluster xpto -->
+            <when condition="@(context.Request.OriginalUrl.Path.ToString().Split('/')[4].Split('-')[0].ToCharArray().Sum(c => c) % 9 < 100)">
+                <set-backend-service base-url="http://<ip>/<apiname>/<version>" />
+            </when>
+            <!-- endpoint b -->
+            <otherwise>
+                <set-backend-service base-url="http://<ip>" />
+            </otherwise>
+        </choose>
+        <!-- 
+           Lista de ativação status da fatura.
+        <choose>
+            <when condition="@(
+            (context.Request.OriginalUrl.Path.ToString().Split('/')[4].Equals("5db1d0a0-a85f-4fc0-b44b-586a9fcd42aa"))
+         || (context.Request.OriginalUrl.Path.ToString().Split('/')[4].Equals("152b1673-4473-44ea-8cc8-05e7055d8820"))
+         || (context.Request.OriginalUrl.Path.ToString().Split('/')[4].Equals("15c2dd7d-51a6-3496-86a3-6f504f3954c4"))
+         || (context.Request.OriginalUrl.Path.ToString().Split('/')[4].Equals("9f91becb-2d41-42e7-bf34-3c0ffc18e985"))
+         || (context.Request.OriginalUrl.Path.ToString().Split('/')[4].Equals("1102438b-fb07-447b-963e-db2b9ddf435d"))
+         || (context.Request.OriginalUrl.Path.ToString().Split('/')[4].Equals("5ff52fc7-4ea5-4a80-abbf-78e48b35f41f"))
+            )">
+                <set-header name="x-verify-status-bill" exists-action="override">
+                    <value>true</value>
+                </set-header>
+            </when>
+        </choose>
+        -->
+        <choose>
+            <when condition="@(context.Request.Headers.ContainsKey("Authorization"))">
+                <set-variable name="jwtResponse" value="@(context.Request.Headers.GetValueOrDefault("Authorization").AsJwt())" />
+                <!--<set-variable name="sub" value="@(context.Request.Headers.GetValueOrDefault("Authorization").AsJwt()?.Subject)" />-->
+                <set-variable name="sub" value="@(context.Request.OriginalUrl.Path.ToString().Split('/')[4])" />
+                <choose>
+                    <when condition="@(context.Variables.GetValueOrDefault<Jwt>("jwtResponse")?.Issuer != null && context.Variables.GetValueOrDefault<Jwt>("jwtResponse").Issuer.ToString().Equals("https://auth.vivo.com.br:443/oauth2"))">
+                        <validate-jwt header-name="Authorization" failed-validation-httpcode="401" failed-validation-error-message="Unauthorized. Access token is missing or invalid." require-scheme="Bearer">
+                            <openid-config url="https://api-internal.telefonicabigdata.com:8443/auth-vivo-com-br/" />
+                        </validate-jwt>
+                        <set-variable name="client" value="@(JsonConvert.DeserializeObject<JObject>(JsonConvert.SerializeObject((context.Request.Headers.GetValueOrDefault("Authorization").AsJwt())))["Claims"]["client"][0].ToString().Replace("\"", ""))" />
+						<choose>
+							<when condition="@(context.Variables.GetValueOrDefault<string>("sub").ToString().Equals(context.Variables.GetValueOrDefault<string>("client")))">
+								<set-variable name="sub" value="@(context.Request.OriginalUrl.Path.ToString().Split('/')[4])" />
+							</when>
+						</choose>
+					</when>
+					<when condition="@(context.Variables.GetValueOrDefault<Jwt>("jwtResponse")?.Issuer != null && context.Variables.GetValueOrDefault<Jwt>("jwtResponse").Issuer.ToString().Equals("https://autenticaint.vivo.com.br"))">
+						<validate-jwt header-name="Authorization" failed-validation-httpcode="401" failed-validation-error-message="Unauthorized. Access token is missing or invalid." require-scheme="Bearer">
+							<openid-config url="https://api-internal.telefonicabigdata.com:8443/openid-connect/" />
+						</validate-jwt>
+						<set-variable name="client" value="@(JsonConvert.DeserializeObject<JObject>(JsonConvert.SerializeObject((context.Request.Headers.GetValueOrDefault("Authorization").AsJwt())))["Claims"]["client"][0].ToString().Replace("\"", ""))" />
+                        <choose>
+                            <when condition="@(context.Variables.GetValueOrDefault<string>("sub").ToString().Equals(context.Variables.GetValueOrDefault<string>("client")))">
+                                <set-variable name="sub" value="@(context.Request.OriginalUrl.Path.ToString().Split('/')[4])" />
+                            </when>
+                        </choose>
+                    </when>
+                    <when condition="@(context.Variables.GetValueOrDefault<Jwt>("jwtResponse")?.Issuer != null && context.Variables.GetValueOrDefault<Jwt>("jwtResponse").Issuer.ToString().Equals("www.oracle.example.com"))">
+                        <validate-jwt header-name="Authorization" failed-validation-httpcode="401" failed-validation-error-message="Unauthorized. Access token is missing or invalid." require-scheme="Bearer">
+                            <openid-config url="https://proauth.blob.core.windows.net/oracle/openid-configuration.json?sp=r&amp;st=2020-11-10T18:54:09Z&amp;se=2099-11-11T02:54:09Z&amp;spr=https&amp;sv=2019-12-12&amp;sr=b&amp;sig=4Io58jQ6IxnkhdrUfDWoaM1uQno1g5LUtXbLXE%2F9Kgo%3D" />
+                        </validate-jwt>
+                    </when>
+                    <otherwise>
+                        <return-response>
+                            <set-status code="403" reason="Forbidden" />
+                            <set-header name="content-type" exists-action="append">
+                                <value>application/json</value>
+                            </set-header>
+                            <set-header name="x-iss" exists-action="append">
+                                <value>@{  var a = context.Request.Headers.GetValueOrDefault("Authorization");
+                                    return JsonConvert.SerializeObject(a);}</value>
+                            </set-header>
+                            <set-header name="x-correlator" exists-action="append">
+                                <value>@(context.Request.Headers.GetValueOrDefault("x-correlator"))</value>
+                            </set-header>
+                            <set-header name="WWW-Authenticate" exists-action="append">
+                                <value>@("Bearer realm="+context.Request.OriginalUrl.Host)</value>
+                            </set-header>
+                            <set-body>@("{\r\n  \"code\": \"PERMISSION_DENIED\",\r\n  \"message\": \"Authenticated user has no permission to access the requested resource\"\r\n}")</set-body>
+                        </return-response>
+                    </otherwise>
+                </choose>
+                <set-header name="access_token" exists-action="override">
+                    <value>@{ return JsonConvert.SerializeObject(context.Variables.GetValueOrDefault<Jwt>("jwtResponse"));}</value>
+                </set-header>
+            </when>
+            <when condition="@(!context.Request.Headers.ContainsKey("Authorization") && context.Request.Headers.ContainsKey("x-token-info"))">
+                <check-header name="Ocp-Apim-Subscription-Key" failed-check-httpcode="401" failed-check-error-message="Not authorized" ignore-case="false">
+                    <value>a0ad46c9f48540a7a3787a084733ff47</value>
+                    <value>ad0f9453cbbb4a6e86819d545b56f6b0</value>
+                    <value>448cafcc70434677bda2c8134ae1ca62</value>
+                </check-header>
+                <set-variable name="jsonResponse" value="@(JsonConvert.DeserializeObject<JObject>(context.Request.Headers.GetValueOrDefault("x-token-info")))" />
+                <choose>
+                    <when condition="@(context.Variables.GetValueOrDefault<JObject>("jsonResponse") != null && context.Variables.GetValueOrDefault<JObject>("jsonResponse")["sub"] != null)">
+                        <set-variable name="sub" value="@(context.Variables.GetValueOrDefault<JObject>("jsonResponse")["sub"].ToString())" />
+                    </when>
+                    <otherwise>
+                        <set-variable name="sub" value="@(context.Request.OriginalUrl.Path.ToString().Split('/')[4])" />
+                    </otherwise>
+                </choose>
+                <choose>
+                    <when condition="@(context.Request.OriginalUrl.Path.Contains("phone-numbers"))">
+                        <set-variable name="phonenumbersurl" value="@(context.Request.OriginalUrl.Path.ToString().Split('/')[6])" />
+                        <choose>
+                            <when condition="@(!Regex.Match(context.Variables.GetValueOrDefault<string>("phonenumbersurl"),@"^(\+|0)[0-9]{12,13}$").Success)">
+                                <return-response>
+                                    <set-status code="400" reason="Bad Request " />
+                                    <set-header name="x-correlator" exists-action="append">
+                                        <value>@(context.Request.Headers.GetValueOrDefault("x-correlator"))</value>
+                                    </set-header>
+                                    <set-header name="content-type" exists-action="append">
+                                        <value>application/json</value>
+                                    </set-header>
+                                    <set-body>@("{\r\n  \"code\": \"INVALID_ARGUMENT\",\r\n  \"message\": \"Client specified an invalid argument, request body or query param\"\r\n}")</set-body>
+                                </return-response>
+                            </when>
+                        </choose>
+                    </when>
+                </choose>
+                <!--aqui-->
+            </when>
+            <otherwise>
+                <return-response>
+                    <set-status code="403" reason="Forbidden" />
+                    <set-header name="content-type" exists-action="append">
+                        <value>application/json</value>
+                    </set-header>
+                    <set-header name="x-correlator" exists-action="append">
+                        <value>@(context.Request.Headers.GetValueOrDefault("x-correlator"))</value>
+                    </set-header>
+                    <set-header name="WWW-Authenticate" exists-action="append">
+                        <value>@("Bearer realm="+context.Request.OriginalUrl.Host)</value>
+                    </set-header>
+                    <set-body>@("{\r\n  \"code\": \"PERMISSION_DENIED\",\r\n  \"message\": \"Authenticated user has no permission to access the requested resource\"\r\n}")</set-body>
+                </return-response>
+            </otherwise>
+        </choose>
+        <!-- Send request to Token Server to validate token (see RFC 7662) -->
+        <send-request mode="new" response-variable-name="userprofileresponse" timeout="20" ignore-error="true">
+            <set-url>@{
+            return "https://api-internal.telefonicabigdata.com:8443/userprofile/v3/users/"+ context.Variables.GetValueOrDefault<string>("sub"); }</set-url>
+            <set-method>GET</set-method>
+            <set-header name="content-type" exists-action="append">
+                <value>application/json; charset=utf-8</value>
+            </set-header>
+            <set-header name="Ocp-Apim-Subscription-Key" exists-action="override">
+                <value>ad0f9453cbbb4a6e86819d545b56f6b0</value>
+            </set-header>
+        </send-request>
+        <choose>
+            <!-- Check active property in response -->
+            <when condition="@(((IResponse)context.Variables["userprofileresponse"]) == null || ((IResponse)context.Variables["userprofileresponse"]).StatusCode != 200)">
+                <!-- Return 401 Unauthorized with http-problem payload -->
+                <return-response>
+                    <set-status code="404" reason="Not Found" />
+                    <set-header name="WWW-Authenticate" exists-action="override">
+                        <value>Bearer error="invalid_user"</value>
+                    </set-header>
+                    <set-header name="x-sub" exists-action="append">
+                        <value>@(context.Variables.GetValueOrDefault<string>("sub"))</value>
+                    </set-header>
+                    <set-header name="content-type" exists-action="append">
+                        <value>application/json</value>
+                    </set-header>
+                    <set-header name="x-correlator" exists-action="append">
+                        <value>@(context.Request.Headers.GetValueOrDefault("x-correlator"))</value>
+                    </set-header>
+                    <set-body>@("{\r\n  \"code\": \"NOT_FOUND\",\r\n  \"message\": \"A specified resource is not found\"\r\n}")</set-body>
+                </return-response>
+            </when>
+        </choose>
+        <set-header name="x-4p-user-profile" exists-action="override">
+            <value>@{  
+            if(((IResponse)context.Variables["userprofileresponse"]) != null){
+                    var a = ((IResponse)context.Variables["userprofileresponse"]).Body.As<JObject>();
+                                    return JsonConvert.SerializeObject(a);
+                                    }
+                                
+                                    return "";}</value>
+        </set-header>
+        <base />
+        <!--
+        <cache-lookup vary-by-developer="false" vary-by-developer-groups="false" must-revalidate="true" downstream-caching-type="public" caching-type="internal">
+            <vary-by-header>x-correlator</vary-by-header>
+        </cache-lookup>
+        -->
+        <cors allow-credentials="true">
+            <allowed-origins>
+                <origin>http://autenticainthml.redecorp.br/</origin>
+            </allowed-origins>
+            <allowed-methods preflight-result-max-age="300">
+                <method>GET</method>
+                <method>POST</method>
+                <method>PATCH</method>
+                <method>DELETE</method>
+            </allowed-methods>
+            <allowed-headers>
+                <header>*</header>
+            </allowed-headers>
+            <expose-headers>
+                <header>*</header>
+            </expose-headers>
+        </cors>
+    </inbound>
+    <backend>
+        <base />
+    </backend>
+    <outbound>
+        <base />
+        <!-- <cache-store duration="30" /> -->
+    </outbound>
+    <on-error>
+        <set-header name="ErrorSource" exists-action="override">
+            <value>@(context.LastError.Source)</value>
+        </set-header>
+        <set-header name="ErrorReason" exists-action="override">
+            <value>@(context.LastError.Reason)</value>
+        </set-header>
+        <set-header name="ErrorMessage" exists-action="override">
+            <value>@(context.LastError.Message)</value>
+        </set-header>
+        <set-header name="ErrorScope" exists-action="override">
+            <value>@(context.LastError.Scope)</value>
+        </set-header>
+        <set-header name="ErrorSection" exists-action="override">
+            <value>@(context.LastError.Section)</value>
+        </set-header>
+        <set-header name="ErrorPath" exists-action="override">
+            <value>@(context.LastError.Path)</value>
+        </set-header>
+        <set-header name="ErrorPolicyId" exists-action="override">
+            <value>@(context.LastError.PolicyId)</value>
+        </set-header>
+        <set-header name="ErrorStatusCode" exists-action="override">
+            <value>@(context.Response.StatusCode.ToString())</value>
+        </set-header>
+        <base />
+    </on-error>
+</policies>
